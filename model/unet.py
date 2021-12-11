@@ -153,15 +153,18 @@ class UNet(object):
             return tf.nn.sigmoid(fc1), fc1, fc2
 
     def build_model(self, is_training=True, inst_norm=False, no_target_source=False):
+        # 这里的输入方式比较特别, 输入一个tensor，但是是用通道来划分real_B和real_A的
         real_data = tf.placeholder(tf.float32,
                                    [self.batch_size, self.input_width, self.input_width,
                                     self.input_filters + self.output_filters],
                                    name='real_A_and_B_images')
         embedding_ids = tf.placeholder(tf.int64, shape=None, name="embedding_ids")
+        # 输入无类别的样本
         no_target_data = tf.placeholder(tf.float32,
                                         [self.batch_size, self.input_width, self.input_width,
                                          self.input_filters + self.output_filters],
                                         name='no_target_A_and_B_images')
+        # 这个ids是随机的吗，还是给一个-1
         no_target_ids = tf.placeholder(tf.int64, shape=None, name="no_target_embedding_ids")
 
         # target images
@@ -169,7 +172,9 @@ class UNet(object):
         # source images
         real_A = real_data[:, :, :, self.input_filters:self.input_filters + self.output_filters]
 
+        # 搭建嵌入网络
         embedding = init_embedding(self.embedding_num, self.embedding_dim)
+        # 基于嵌入网络和real_A来搭建G
         fake_B, encoded_real_A = self.generator(real_A, embedding, embedding_ids, is_training=is_training,
                                                 inst_norm=inst_norm)
         real_AB = tf.concat([real_A, real_B], 3)
@@ -186,28 +191,35 @@ class UNet(object):
         encoded_fake_B = self.encoder(fake_B, is_training, reuse=True)[0]
         const_loss = (tf.reduce_mean(tf.square(encoded_real_A - encoded_fake_B))) * self.Lconst_penalty
 
-        # category loss
+        # category loss 字体类别损失函数
+        # 将字体的类别id转成one-hot的向量，用于损失的计算
         true_labels = tf.reshape(tf.one_hot(indices=embedding_ids, depth=self.embedding_num),
                                  shape=[self.batch_size, self.embedding_num])
+        # 无论是real还是fake，他们都属于同种字体
         real_category_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=real_category_logits,
                                                                                     labels=true_labels))
         fake_category_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=fake_category_logits,
                                                                                     labels=true_labels))
         category_loss = self.Lcategory_penalty * (real_category_loss + fake_category_loss)
 
-        # binary real/fake loss
+        # binary real/fake loss 数据真假的损失函数
         d_loss_real = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=real_D_logits,
+                                                                             # 这里并不是给一个明确的real label或者是fake label
+                                                                             # 而是采用全连接层抽取得到的向量 --> sigmoid --> 再用tf.ones_like()突出最大位置上的值转为one-hot数据
                                                                              labels=tf.ones_like(real_D)))
         d_loss_fake = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=fake_D_logits,
+                                                                             # 而是采用全连接层抽取得到的向量 --> sigmoid --> 再用tf.ones_like()突出最小位置上的值转为one-hot数据
                                                                              labels=tf.zeros_like(fake_D)))
         # L1 loss between real and generated images
+        # L1损失这里简单的要死, 直接将fake_B和real_B相减就行了
         l1_loss = self.L1_penalty * tf.reduce_mean(tf.abs(fake_B - real_B))
-        # total variation loss
+        # total variation loss 这个loss的意义我没有看出来(进行了前后交叉相减)
         width = self.output_width
         tv_loss = (tf.nn.l2_loss(fake_B[:, 1:, :, :] - fake_B[:, :width - 1, :, :]) / width
                    + tf.nn.l2_loss(fake_B[:, :, 1:, :] - fake_B[:, :, :width - 1, :]) / width) * self.Ltv_penalty
 
         # maximize the chance generator fool the discriminator
+        # 最大化 欺骗loss 来愚弄判别器
         cheat_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=fake_D_logits,
                                                                             labels=tf.ones_like(fake_D)))
 
@@ -219,6 +231,8 @@ class UNet(object):
             # however, except L1 loss, we can compute category loss, binary loss and constant losses with those examples
             # it is useful when discriminator get saturated and d_loss drops to near zero
             # those data could be used as additional source of losses to break the saturation
+
+            # 取出没有real_B的A ----> no_target_A
             no_target_A = no_target_data[:, :, :, self.input_filters:self.input_filters + self.output_filters]
             no_target_B, encoded_no_target_A = self.generator(no_target_A, embedding, no_target_ids,
                                                               is_training=is_training,
@@ -230,15 +244,18 @@ class UNet(object):
                                                                                             is_training=is_training,
                                                                                             reuse=True)
             encoded_no_target_B = self.encoder(no_target_B, is_training, reuse=True)[0]
+
+            # 计算const_loss
             no_target_const_loss = tf.reduce_mean(
                 tf.square(encoded_no_target_A - encoded_no_target_B)) * self.Lconst_penalty
+            # 字体类别损失
             no_target_category_loss = tf.reduce_mean(
                 tf.nn.sigmoid_cross_entropy_with_logits(logits=no_target_category_logits,
                                                         labels=no_target_labels)) * self.Lcategory_penalty
-
+            # 数据真假损失(那肯定是假的)
             d_loss_no_target = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=no_target_D_logits,
-                                                                                      labels=tf.zeros_like(
-                                                                                          no_target_D)))
+                                                                                      labels=tf.zeros_like(no_target_D)))
+            # 欺骗损失在pytorch的版本里面是没有的，这个损失的意义我也没看出来
             cheat_loss += tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=no_target_D_logits,
                                                                                  labels=tf.ones_like(no_target_D)))
             d_loss = d_loss_real + d_loss_fake + d_loss_no_target + (category_loss + no_target_category_loss) / 3.0
@@ -539,6 +556,8 @@ class UNet(object):
             for bid, batch in enumerate(train_batch_iter):
                 counter += 1
                 labels, batch_images = batch
+                # no_target其实就是将原有的labels的顺序进行打乱
+                # 但是batch_images的顺序不变
                 shuffled_ids = labels[:]
                 if flip_labels:
                     np.random.shuffle(shuffled_ids)

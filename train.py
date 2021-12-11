@@ -53,6 +53,7 @@ def main(_):
                      Ltv_penalty=args.Ltv_penalty, Lcategory_penalty=args.Lcategory_penalty)
         model.register_session(sess)
         if args.flip_labels:
+            # 搭建网络的时候label shuffling 要多一个分支
             model.build_model(is_training=True, inst_norm=args.inst_norm, no_target_source=True)
         else:
             model.build_model(is_training=True, inst_norm=args.inst_norm)

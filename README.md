@@ -24,6 +24,15 @@ After sufficient training, **d_loss** will drop to near zero, and the model's pe
 Specifically, within a given minibatch, for the same set of source characters, we generate two sets of target characters: one with correct embedding labels, the other with the shuffled labels. The shuffled set likely will not have the corresponding target images to compute **L1\_Loss**, but can be used as a good source for all other losses, forcing the model to further generalize beyond the limited set of provided examples. Empirically, label shuffling improves the model's generalization on unseen data with better details, and decrease the required number of characters.
 
 You can enable label shuffling by setting **flip_labels=1** option in **train.py** script. It is recommended that you enable this after **d_loss** flatlines around zero, for further tuning.
+### V2与V1的不同之处
+####在数据的加载方面
+no_target_ids其实就是将原有的labels的顺序进行打乱
+但是batch_images的顺序不变, 所以没有对应的real_B
+####在网络的搭建方面
+增加了一个针对no_target_A数据的分支，该分支其实就是让no_target数据也走一次G和D并计算损失函数的流程，因为没有对应的real_B, 所以就没有计算L1损失函数
+
+
+
 
 ## Gallery
 ### Compare with Ground Truth
